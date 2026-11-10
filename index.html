@@ -421,6 +421,21 @@ body.kb .tabbar{display:none}
 const SUPABASE_URL = 'https://zelndzeflenlqxjuwsrg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_oBYDiht0x8erunJgWXSJ2Q_-SBowKlh';
 
+// Отправка сообщений в Телеграм идёт через функцию tg в Supabase.
+// Токен бота лежит там в секретах и в этот файл не попадает.
+const TG_ENABLED = true;
+const TG_URL = SUPABASE_URL + '/functions/v1/bright-endpoint';
+async function notifyTG(text){
+  if(!TG_ENABLED) return;
+  try{
+    await fetch(TG_URL, {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY},
+      body: JSON.stringify({text})
+    });
+  }catch(e){ console.error('telegram:', e) }
+}
+
 /* ============ данные ============ */
 const PEOPLE = [
   {id:'diana',  name:'Диана', c1:'#8ec9ff', c2:'#2f7bff'},
@@ -515,9 +530,11 @@ function dayList(){ const a=[]; for(let i=0;i<LEN;i++) a.push(addDays(state.star
 
 /* ============ запись ============ */
 const pending = new Map();
-async function saveDay(pid, date, tasks){
+async function saveDay(pid, date, tasks, notePatch){
   const key = pid+'__'+date;
-  state.days.set(key, {person:pid, date, tasks});
+  const prev = state.days.get(key);
+  const notified = Object.assign({}, (prev && prev.notified) || {}, notePatch || {});
+  state.days.set(key, {person:pid, date, tasks, notified});
   render();
   if(!state.db) return;
   if(pending.get(key)){ pending.set(key,'again'); return }
@@ -525,8 +542,12 @@ async function saveDay(pid, date, tasks){
   try{
     while(true){
       const cur = state.days.get(key);
-      const {error} = await state.db.from('days')
-        .upsert({id:key, person:pid, day:date, tasks:cur.tasks, updated_at:new Date().toISOString()});
+      const row = {id:key, person:pid, day:date, tasks:cur.tasks, updated_at:new Date().toISOString()};
+      let {error} = await state.db.from('days').upsert(Object.assign({notified:cur.notified}, row));
+      // если колонку notified ещё не добавили в базу — сохраняем без неё
+      if(error && /notified/i.test(error.message || '')){
+        ({error} = await state.db.from('days').upsert(row));
+      }
       if(error) throw error;
       if(pending.get(key)!=='again') break;
       pending.set(key, true);
@@ -796,7 +817,15 @@ document.addEventListener('click', e=>{
     const d = docOf(state.me, state.cursor);
     if(!d) return;
     const tasks = d.tasks.map((t,k)=> k===i ? {...t, done:!t.done} : t);
-    saveDay(state.me, state.cursor, tasks); return;
+    const allDone = tasks.length > 0 && tasks.every(t=>t.done);
+    const already = (d.notified || {}).done;
+    saveDay(state.me, state.cursor, tasks, (allDone && !already) ? {done:true} : null);
+    if(allDone && !already){
+      const me = byId(state.me), dt = parseYmd(state.cursor);
+      notifyTG(`✅ ${me.name} закрыла день — ${dt.getDate()} ${MN[dt.getMonth()]}\n`
+        + `Все ${tasks.length} задачи сделаны, день зелёный 🟢`);
+    }
+    return;
   }
   const dl = e.target.closest('[data-del]');
   if(dl){
@@ -860,7 +889,14 @@ $('launchBtn').addEventListener('click', ()=>{
   if(!dr.length) return;
   clearDraft();
   state.adding = false;
-  saveDay(state.me, state.cursor, dr.map(t=>({text:t, done:false})));
+  const tasks = dr.map(t=>({text:t, done:false}));
+  const already = (docOf(state.me, state.cursor) || {}).notified || {};
+  saveDay(state.me, state.cursor, tasks, {launch:true});
+  if(!already.launch){
+    const me = byId(state.me), d = parseYmd(state.cursor);
+    notifyTG(`🚀 ${me.name} — план на ${d.getDate()} ${MN[d.getMonth()]}\n\n`
+      + tasks.map((t,i)=>`${i+1}. ${t.text}`).join('\n'));
+  }
 });
 $('moreBtn').addEventListener('click', ()=>{
   state.adding = true; render();
@@ -886,7 +922,11 @@ function applyRows(rows){
   (rows||[]).forEach(r=>{
     if(!r.person || !r.day) return;
     const date = String(r.day).slice(0,10);
-    state.days.set(r.person+'__'+date, {person:r.person, date, tasks:Array.isArray(r.tasks)?r.tasks:[]});
+    state.days.set(r.person+'__'+date, {
+      person:r.person, date,
+      tasks: Array.isArray(r.tasks) ? r.tasks : [],
+      notified: (r.notified && typeof r.notified === 'object') ? r.notified : {}
+    });
   });
 }
 
