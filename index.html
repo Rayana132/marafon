@@ -823,7 +823,7 @@ document.addEventListener('click', e=>{
     if(allDone && !already){
       const me = byId(state.me), dt = parseYmd(state.cursor);
       notifyTG(`✅ ${me.name} закрыла день — ${dt.getDate()} ${MN[dt.getMonth()]}\n`
-        + `Все ${tasks.length} задачи сделаны, день зелёный 🟢`);
+        + `Сделано ${tasks.length} из ${tasks.length}, день зелёный 🟢`);
     }
     return;
   }
@@ -891,12 +891,13 @@ $('launchBtn').addEventListener('click', ()=>{
   state.adding = false;
   const tasks = dr.map(t=>({text:t, done:false}));
   const already = (docOf(state.me, state.cursor) || {}).notified || {};
-  saveDay(state.me, state.cursor, tasks, {launch:true});
-  if(!already.launch){
-    const me = byId(state.me), d = parseYmd(state.cursor);
-    notifyTG(`🚀 ${me.name} — план на ${d.getDate()} ${MN[d.getMonth()]}\n\n`
-      + tasks.map((t,i)=>`${i+1}. ${t.text}`).join('\n'));
-  }
+  // первый запуск дня — «план», повторный — «план изменён»; день снова можно закрыть
+  saveDay(state.me, state.cursor, tasks, {launch:true, done:false});
+  const me = byId(state.me), d = parseYmd(state.cursor);
+  const head = already.launch
+    ? `📝 ${me.name} изменила план на ${d.getDate()} ${MN[d.getMonth()]}`
+    : `🚀 ${me.name} — план на ${d.getDate()} ${MN[d.getMonth()]}`;
+  notifyTG(head + '\n\n' + tasks.map((t,i)=>`${i+1}. ${t.text}`).join('\n'));
 });
 $('moreBtn').addEventListener('click', ()=>{
   state.adding = true; render();
